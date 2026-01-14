@@ -8,7 +8,7 @@ train:
 	$(SRCENV) && python src/train.py
 
 train-dev:
-	$(SRCENV) && python src/train.py --dev --max-samples=1000 --epochs 2
+	$(SRCENV) && python src/train.py --max-samples=200 --batch-size=8 --epochs 3
 
 clean:
 	rm -rf env
