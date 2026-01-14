@@ -1,10 +1,11 @@
 import argparse
-from typing import Any, Optional, Tuple
+from typing import Any, Callable, Dict, List
 
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
-from torchvision import models, transforms
+from torchvision import transforms
+from torchvision.models.detection import faster_rcnn, fasterrcnn_resnet50_fpn, FasterRCNN_ResNet50_FPN_Weights
 from tqdm import tqdm
 
 from coco import CocoDataset, CocoSplit
@@ -31,8 +32,11 @@ def get_transforms(train: bool = True) -> transforms.Compose:
 
 
 def build_model(num_classes: int):
-    model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-    model.fc = nn.Linear(model.fc.in_features, num_classes)
+    # Use pretrained weights for better convergence
+    model = fasterrcnn_resnet50_fpn(weights=FasterRCNN_ResNet50_FPN_Weights.DEFAULT)
+    # Replace the classifier head for our number of classes
+    in_features = model.roi_heads.box_predictor.cls_score.in_features
+    model.roi_heads.box_predictor = faster_rcnn.FastRCNNPredictor(in_features, num_classes)
     return model
 
 
