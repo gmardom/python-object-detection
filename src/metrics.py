@@ -2,23 +2,33 @@ import json
 from pathlib import Path
 from typing import List, Optional
 
-
 class MetricsEntry:
-    def __init__(self, epoch: int, train_loss: float, train_accu: float, value_loss: float, value_accu: float) -> None:
+    def __init__(self, epoch: int, loss: float, accu: float) -> None:
         self.epoch: int = epoch
-        self.train_loss: float = train_loss
-        self.train_accu: float = train_accu
-        self.value_loss: float = value_loss
-        self.value_accu: float = value_accu
+        self.loss: float = loss
+        self.accu: float = accu
 
     def __str__(self) -> str:
-        return f"Epoch {self.epoch: 3d}: tl = {self.train_loss:.4f}, ta = {self.train_accu:.4f}, vl = {self.value_loss:.4f}, va = {self.value_accu:.4f}"
+        return f"Epoch {self.epoch: 3d}: Loss = {self.loss:.4f}, Accu = {self.accu:.4f}"
+
+    def to_dict(self):
+        return {
+            "epoch": self.epoch,
+            "loss": self.loss,
+            "accu": self.accu
+        }
 
 
 class MetricsTestEntry:
     def __init__(self, loss: float, accu: float) -> None:
         self.loss: float = loss
         self.accu: float = accu
+
+    def to_dict(self):
+        return {
+            "loss": self.loss,
+            "accu": self.accu
+        }
 
 
 class Metrics:
@@ -32,7 +42,13 @@ class Metrics:
     def add_test(self, entry: MetricsTestEntry) -> None:
         self.test = entry
 
+    def to_dict(self):
+        return {
+            "epoch": [e.to_dict() for e in self.epoch],
+            "test": self.test.to_dict() if self.test else None
+        }
+
     def save(self, path: Path = Path("data/train_metrics.json")) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w") as f:
-            json.dump(self, f, indent=2)
+            json.dump(self.to_dict(), f, indent=2)

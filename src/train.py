@@ -13,22 +13,15 @@ from metrics import Metrics, MetricsEntry
 
 
 def get_transforms(train: bool = True) -> transforms.Compose:
-    normalize = transforms.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])
-    if train == True:
-        return transforms.Compose([
-            transforms.Resize(256),
-            transforms.RandomResizedCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ])
-    else:
-        return transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ])
+    """
+    Simple transforms for detecion.
+
+    torchvision models expect images as float tensors in [0, 1].
+    """
+    t: List[Callable] = [transforms.ToTensor()]
+    if train:
+        t.insert(0, transforms.RandomHorizontalFlip(0.5))
+    return transforms.Compose(t)
 
 
 def build_model(num_classes: int):
@@ -40,14 +33,54 @@ def build_model(num_classes: int):
     return model
 
 
-def accuracy(outputs: torch.Tensor, targets: torch.Tensor) -> float:
-    # For multi-label classification: check if predicted class is in the set of true classes
-    preds = outputs.argmax(dim=1)  # Shape: [batch_size]
-    # targets shape: [batch_size, num_classes] - multi-label binary tensor
-    # Use advanced indexing to check if predicted class is in true labels for each sample
-    batch_indices = torch.arange(preds.size(0), device=targets.device)
-    correct = targets[batch_indices, preds] > 0.5
-    return correct.float().mean().item()
+def collate_fn(batch):
+    return tuple(zip(*batch))
+
+
+def compute_found_rate(predictions: List[Dict[str, torch.Tensor]], targets: List[Dict[str, torch.Tensor]], iou_threshold: float = 0.5):
+    """
+    predictions: list of dicts with keys 'boxes', 'labels', 'scores'
+    targets:     list of dicts with keys 'boxes', 'labels'
+    Returns: fraction of GT objects that were "found" (IoU >= thresh + correct class)
+    """
+    total_gt = 0
+    found = 0
+
+    for pred, target in zip(predictions, targets):
+        gt_boxes = target["boxes"]
+        gt_labels = target["labels"]
+        pred_boxes = pred["boxes"]
+        pred_labels = pred["labels"]
+
+        if gt_boxes.numel() == 0:
+            continue
+        total_gt += gt_boxes.size(0)
+
+        if pred_boxes.numel() == 0:
+            continue  # no predictions → nothing found
+
+        foreground_mask = (pred_labels != 0)
+        if not foreground_mask.any():
+            continue
+
+        # Compute IoU between all pred and GT boxes
+        # torchvision has a built-in function!
+        from torchvision.ops import box_iou
+        ious = box_iou(pred_boxes, gt_boxes)  # [num_pred, num_gt]
+
+        # For each GT box, check if any pred matches (same class + IoU >= thresh)
+        for gt_idx in range(gt_labels.size(0)):
+            gt_label = gt_labels[gt_idx]
+            # Find preds with same class
+            match_class = (pred_labels == gt_label)
+            if not match_class.any():
+                continue
+            # Max IoU among same-class preds for this GT
+            max_iou = ious[match_class, gt_idx].max()
+            if max_iou >= iou_threshold:
+                found += 1
+
+    return found / total_gt if total_gt > 0 else 1.0
 
 
 def train_one_epoch(
@@ -55,88 +88,102 @@ def train_one_epoch(
     model: nn.Module,
     loader: DataLoader[Any],
     optimizer: optim.Optimizer,
-    criterion: nn.Module,
     device: torch.device,
-) -> Tuple[float, float]:
+) -> float:
     model.train()
 
     running_loss = 0.0
-    running_accu = 0.0
     total = 0
 
     for images, targets in tqdm(loader, desc=f"Train {epoch: 3d}"):
-        images, targets = images.to(device), targets.to(device)
+        images = [img.to(device) for img in images]
+        targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
+
+        loss_dict: Dict[str, torch.Tensor] = model(images, targets)
+        loss = sum(loss for loss in loss_dict.values())
 
         optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
 
-        batch_size = targets.size(0)
-        running_loss += loss.item() * batch_size
-        running_accu += accuracy(outputs, targets) * batch_size
-        total += batch_size
+        running_loss += loss.item()
+        total += 1
 
-    return running_loss / total, running_accu / total
+    total = max(total, 1)
+    return running_loss / total
 
 
 def evaluate(
     epoch: int,
     model: nn.Module,
     loader: DataLoader[Any],
-    criterion: nn.Module,
     device: torch.device,
-) -> Tuple[float, float]:
+) -> float:
     model.eval()
 
-    running_loss = 0.0
-    running_accu = 0.0
+    running_found_rate = 0.0
     total = 0
 
     with torch.no_grad():
         for images, targets in tqdm(loader, desc=f" Eval {epoch: 3d}"):
-            images, targets = images.to(device), targets.to(device)
+            images = [img.to(device) for img in images]
+            targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
             outputs = model(images)
-            loss = criterion(outputs, targets)
+            found_rate = compute_found_rate(outputs, targets, iou_threshold=0.5)
+            running_found_rate += found_rate
 
-            batch_size = targets.size(0)
-            running_loss += loss.item() * batch_size
-            running_accu += accuracy(outputs, targets) * batch_size
-            total += batch_size
+            total += 1
 
-    return running_loss / total, running_accu / total
-
+    return running_found_rate / total
 
 
 def main(args: argparse.Namespace) -> None:
     # Training dataset
     train_split = CocoSplit.VALIDATE if args.dev else CocoSplit.TRAIN
-    train_dataset = CocoDataset(split=train_split, transforms=get_transforms(train=True), max_samples=args.max_samples)
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    train_dataset = CocoDataset(
+        split=train_split,
+        transforms=get_transforms(train=True),
+        max_samples=args.max_samples
+    )
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        collate_fn=collate_fn,
+    )
 
     # Value dataset
-    value_split = CocoSplit.VALIDATE
-    value_dataset = CocoDataset(split=value_split, transforms=get_transforms(train=False), max_samples=args.max_samples)
-    value_loader = DataLoader(value_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+    val_split = CocoSplit.VALIDATE
+    val_dataset = CocoDataset(
+        split=val_split,
+        transforms=get_transforms(train=False),
+        max_samples=args.max_samples
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        collate_fn=collate_fn,
+    )
 
     # Create model
     device = torch.device(args.device)
-    model = build_model(train_dataset.num_classes).to(device)
-    criterion = nn.BCEWithLogitsLoss()
-    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    model = build_model(train_dataset.num_classes + 1).to(device)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # Training
     metrics = Metrics()
 
     for epoch in range(1, args.epochs + 1):
-        train_loss, train_accu = train_one_epoch(epoch, model, train_loader, optimizer, criterion, device)
-        value_loss, value_accu = evaluate(epoch, model, value_loader, criterion, device)
+        loss = train_one_epoch(epoch, model, train_loader, optimizer, device)
+        accu = evaluate(epoch, model, val_loader, device)
 
-        current = MetricsEntry(epoch, train_loss, train_accu, value_loss, value_accu)
-        metrics.add_epoch(current)
-        print(current)
+        measure = MetricsEntry(epoch, loss, accu)
+        metrics.add_epoch(measure)
+        print(measure)
 
     # Save metrics
     metrics.save()
