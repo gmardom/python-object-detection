@@ -4,11 +4,30 @@ from typing import Any, Optional, Tuple
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader
-from torchvision import models
+from torchvision import models, transforms
 from tqdm import tqdm
 
 from coco import CocoDataset, CocoSplit
 from metrics import Metrics, MetricsEntry
+
+
+def get_transforms(train: bool = True) -> transforms.Compose:
+    normalize = transforms.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])
+    if train == True:
+        return transforms.Compose([
+            transforms.Resize(256),
+            transforms.RandomResizedCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize,
+        ])
+    else:
+        return transforms.Compose([
+            transforms.Resize(256),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            normalize,
+        ])
 
 
 def build_model(num_classes: int):
@@ -89,13 +108,13 @@ def evaluate(
 
 def main(args: argparse.Namespace) -> None:
     # Training dataset
-    train_split = CocoSplit.VAL if args.dev else CocoSplit.TRAIN
-    train_dataset = CocoDataset(split=train_split, transforms=train_split.get_transforms(), max_samples=args.max_samples)
+    train_split = CocoSplit.VALIDATE if args.dev else CocoSplit.TRAIN
+    train_dataset = CocoDataset(split=train_split, transforms=get_transforms(train=True), max_samples=args.max_samples)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
 
     # Value dataset
-    value_split = CocoSplit.VAL
-    value_dataset = CocoDataset(split=value_split, transforms=value_split.get_transforms(), max_samples=args.max_samples)
+    value_split = CocoSplit.VALIDATE
+    value_dataset = CocoDataset(split=value_split, transforms=get_transforms(train=False), max_samples=args.max_samples)
     value_loader = DataLoader(value_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
     # Create model
