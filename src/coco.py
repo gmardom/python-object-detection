@@ -11,41 +11,13 @@ import requests
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
-from torchvision import transforms
 from tqdm import tqdm
 
 
 class CocoSplit(Enum):
     TRAIN: str = "train"
-    VAL: str = "val"
+    VALIDATE: str = "val"
     TEST: str = "test"
-
-    def get_transforms(self) -> transforms.Compose:
-        normalize = transforms.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])
-        if self is self.TRAIN:
-            return transforms.Compose([
-                transforms.Resize(256),
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                normalize,
-            ])
-        elif self is self.VAL:
-            return transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize,
-            ])
-        elif self is self.TEST:
-            return transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize,
-            ])
-        else:
-            return None
 
     def get_images_root(self, root: Path) -> Path:
         path: Path = root / f"{self.value}2017"
