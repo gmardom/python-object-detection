@@ -150,18 +150,32 @@ def main(args: argparse.Namespace) -> None:
 
     # Training
     metrics = Metrics()
+    save_path = Path(args.save_path)
+    save_path.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(1, args.epochs + 1):
         loss, train_times = train_one_epoch(epoch, model, train_loader, optimizer, device)
         accu, eval_times = evaluate(epoch, model, val_loader, device)
 
         measure = MetricsEntry(epoch, loss, accu, train_times, eval_times)
+
+        if args.save_all:
+            model_file_name = make_model_filename(epoch, args)
+            torch.save(model.state_dict(), save_path / model_file_name)
+            measure.add_file_name(model_file_name)
+
         metrics.add_epoch(measure)
         print(measure)
 
+    if not args.save_all:
+        model_file_name = make_model_filename(args.epochs, args)
+        metrics.epoch[-1].add_file_name(model_file_name)
+        torch.save(model.state_dict(), save_path / model_file_name)
+
     # Save metrics
-    metrics.save()
     metrics.add_conf(args)
+    metrics_file_name = make_model_filename(args.epochs, args, ext=".json")
+    metrics.save(path=save_path / metrics_file_name)
 
 
 if __name__ == "__main__":
@@ -183,5 +197,9 @@ if __name__ == "__main__":
         "--device", default="cuda" if torch.cuda.is_available() else "cpu", help="Training device.")
     parser.add_argument(
         "--num-workers", type=int, default=4, help="Worker count.")
+    parser.add_argument(
+        "--save-path", type=str, default="models", help="Path where to save models.")
+    parser.add_argument(
+        "--save-all", action=argparse.BooleanOptionalAction, default=False, help="Save all epochs instead of only the last one.")
 
     main(parser.parse_args())

@@ -29,15 +29,20 @@ class MetricsEntry:
         self.accu: float = accu
         self.train_times: List[int] = train_times
         self.eval_times: List[int] = eval_times
+        self.file_name: Optional[str] = None
 
     def __str__(self) -> str:
         return f"Epoch {self.epoch: 3d}: Loss = {self.loss:.4f}, Accu = {self.accu:.4f}"
 
+    def add_file_name(self, file_name: str) -> None:
+        self.file_name = file_name
+
     def to_dict(self):
         return {
             "epoch": self.epoch,
-            "loss": self.loss,
-            "accu": self.accu
+            "file":  self.file_name,
+            "loss":  self.loss,
+            "accu":  self.accu,
             "train": self.train_times,
             "eval":  self.eval_times,
         }
