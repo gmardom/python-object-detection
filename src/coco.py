@@ -1,5 +1,6 @@
 from enum import Enum
 from pathlib import Path
+import random
 from typing import Any, Callable, Dict, List, Optional, Tuple
 import zipfile
 
@@ -82,7 +83,8 @@ class CocoDataset(Dataset):
         root: Path = Path("data/coco"),
         split: CocoSplit = CocoSplit.TRAIN,
         transforms: Optional[Callable] = None,
-        max_samples: Optional[int] = None
+        max_samples: Optional[int] = None,
+        seed: Any = None,
     ):
         # Basic information
         self.split: CocoSplit = split
@@ -93,6 +95,8 @@ class CocoDataset(Dataset):
         # Limit samples if desired
         self.img_ids: list[int] = self.coco.getImgIds()
         if max_samples:
+            random.seed(seed)
+            random.shuffle(self.img_ids)
             self.img_ids = self.img_ids[:max_samples]
 
         # Get list of category ids and names in a deterministic order
