@@ -1,6 +1,9 @@
 import json
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
+
+import torch
+
 
 class MetricsEntry:
     def __init__(self, epoch: int, loss: float, accu: float) -> None:
@@ -52,3 +55,49 @@ class Metrics:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w") as f:
             json.dump(self.to_dict(), f, indent=2)
+
+
+def compute_found_rate(predictions: List[Dict[str, torch.Tensor]], targets: List[Dict[str, torch.Tensor]], iou_threshold: float = 0.5):
+    """
+    predictions: list of dicts with keys 'boxes', 'labels', 'scores'
+    targets:     list of dicts with keys 'boxes', 'labels'
+    Returns: fraction of GT objects that were "found" (IoU >= thresh + correct class)
+    """
+    total_gt = 0
+    found = 0
+
+    for pred, target in zip(predictions, targets):
+        gt_boxes = target["boxes"]
+        gt_labels = target["labels"]
+        pred_boxes = pred["boxes"]
+        pred_labels = pred["labels"]
+
+        if gt_boxes.numel() == 0:
+            continue
+        total_gt += gt_boxes.size(0)
+
+        if pred_boxes.numel() == 0:
+            continue  # no predictions → nothing found
+
+        foreground_mask = (pred_labels != 0)
+        if not foreground_mask.any():
+            continue
+
+        # Compute IoU between all pred and GT boxes
+        # torchvision has a built-in function!
+        from torchvision.ops import box_iou
+        ious = box_iou(pred_boxes, gt_boxes)  # [num_pred, num_gt]
+
+        # For each GT box, check if any pred matches (same class + IoU >= thresh)
+        for gt_idx in range(gt_labels.size(0)):
+            gt_label = gt_labels[gt_idx]
+            # Find preds with same class
+            match_class = (pred_labels == gt_label)
+            if not match_class.any():
+                continue
+            # Max IoU among same-class preds for this GT
+            max_iou = ious[match_class, gt_idx].max()
+            if max_iou >= iou_threshold:
+                found += 1
+
+    return found / total_gt if total_gt > 0 else 1.0
