@@ -28,7 +28,7 @@ class CocoSplit(Enum):
         return path
 
     def get_annotations(self, root: Path) -> Path:
-        path: Path = root / "annotations" / f"instances_{self.value}2017.json"
+        path: Path = root / "annotations" / f"instances_{"val" if self is CocoSplit.TEST else self.value}2017.json"
         if not path.exists():
             down_url = "http://images.cocodataset.org/annotations/annotations_trainval2017.zip"
             down_zip = root / f"annotations_trainval2017.zip"
