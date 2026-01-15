@@ -6,10 +6,12 @@ import torch
 
 
 class MetricsEntry:
-    def __init__(self, epoch: int, loss: float, accu: float) -> None:
+    def __init__(self, epoch: int, loss: float, accu: float, train_times: List[int], eval_times: List[int]) -> None:
         self.epoch: int = epoch
         self.loss: float = loss
         self.accu: float = accu
+        self.train_times: List[int] = train_times
+        self.eval_times: List[int] = eval_times
 
     def __str__(self) -> str:
         return f"Epoch {self.epoch: 3d}: Loss = {self.loss:.4f}, Accu = {self.accu:.4f}"
@@ -19,6 +21,8 @@ class MetricsEntry:
             "epoch": self.epoch,
             "loss": self.loss,
             "accu": self.accu
+            "train": self.train_times,
+            "eval":  self.eval_times,
         }
 
 

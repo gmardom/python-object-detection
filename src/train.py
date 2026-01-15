@@ -1,5 +1,7 @@
 import argparse
-from typing import Any, Callable, Dict, List
+from pathlib import Path
+from time import perf_counter_ns
+from typing import Any, Callable, Dict, List, Tuple
 
 import torch
 from torch import nn, optim
@@ -50,13 +52,16 @@ def train_one_epoch(
     loader: DataLoader[Any],
     optimizer: optim.Optimizer,
     device: torch.device,
-) -> float:
+) -> Tuple[float, List[int]]:
     model.train()
 
+    batch_times: List[int] = []
     running_loss = 0.0
     total = 0
 
     for images, targets in tqdm(loader, desc=f"Train {epoch: 3d}"):
+        start = perf_counter_ns()
+
         images = [img.to(device) for img in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -70,8 +75,11 @@ def train_one_epoch(
         running_loss += loss.item()
         total += 1
 
+        end = perf_counter_ns()
+        batch_times.append(end - start)
+
     total = max(total, 1)
-    return running_loss / total
+    return running_loss / total, batch_times
 
 
 def evaluate(
@@ -79,24 +87,29 @@ def evaluate(
     model: nn.Module,
     loader: DataLoader[Any],
     device: torch.device,
-) -> float:
+) -> Tuple[float, List[int]]:
     model.eval()
 
+    batch_times: List[int] = []
     running_found_rate = 0.0
     total = 0
 
     with torch.no_grad():
         for images, targets in tqdm(loader, desc=f" Eval {epoch: 3d}"):
+            start = perf_counter_ns()
+
             images = [img.to(device) for img in images]
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
             outputs = model(images)
             found_rate = compute_found_rate(outputs, targets, iou_threshold=0.5)
             running_found_rate += found_rate
-
             total += 1
 
-    return running_found_rate / total
+            end = perf_counter_ns()
+            batch_times.append(end - start)
+
+    return running_found_rate / total, batch_times
 
 
 def main(args: argparse.Namespace) -> None:
@@ -139,10 +152,10 @@ def main(args: argparse.Namespace) -> None:
     metrics = Metrics()
 
     for epoch in range(1, args.epochs + 1):
-        loss = train_one_epoch(epoch, model, train_loader, optimizer, device)
-        accu = evaluate(epoch, model, val_loader, device)
+        loss, train_times = train_one_epoch(epoch, model, train_loader, optimizer, device)
+        accu, eval_times = evaluate(epoch, model, val_loader, device)
 
-        measure = MetricsEntry(epoch, loss, accu)
+        measure = MetricsEntry(epoch, loss, accu, train_times, eval_times)
         metrics.add_epoch(measure)
         print(measure)
 
