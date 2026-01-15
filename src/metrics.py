@@ -1,8 +1,25 @@
+import argparse
 import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import torch
+
+
+class MetricsConfig:
+    def __init__(self, args: argparse.Namespace) -> None:
+        self.args = args
+
+    def to_dict(self):
+        return {
+            "epochs": self.args.epochs,
+            "max-samples": self.args.max_samples,
+            "learning-rate": self.args.lr,
+            "weight-decay": self.args.weight_decay,
+            "batch_size": self.args.batch_size,
+            "device": self.args.device,
+            "num_workers": self.args.num_workers,
+        }
 
 
 class MetricsEntry:
@@ -40,8 +57,12 @@ class MetricsTestEntry:
 
 class Metrics:
     def __init__(self) -> None:
+        self.conf: Optional[MetricsConfig] = None
         self.epoch: List[MetricsEntry] = []
         self.test: Optional[MetricsTestEntry] = None
+
+    def add_conf(self, args: argparse.Namespace) -> None:
+        self.conf = MetricsConfig(args)
 
     def add_epoch(self, entry: MetricsEntry) -> None:
         self.epoch.append(entry)
@@ -51,6 +72,7 @@ class Metrics:
 
     def to_dict(self):
         return {
+            "conf": self.conf.to_dict() if self.conf else None,
             "epoch": [e.to_dict() for e in self.epoch],
             "test": self.test.to_dict() if self.test else None
         }

@@ -161,6 +161,7 @@ def main(args: argparse.Namespace) -> None:
 
     # Save metrics
     metrics.save()
+    metrics.add_conf(args)
 
 
 if __name__ == "__main__":
