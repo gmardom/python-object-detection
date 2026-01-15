@@ -118,7 +118,8 @@ def main(args: argparse.Namespace) -> None:
     train_dataset = CocoDataset(
         split=train_split,
         transforms=get_transforms(train=True),
-        max_samples=args.max_samples
+        max_samples=args.max_samples,
+        seed=args.seed,
     )
     train_loader = DataLoader(
         train_dataset,
@@ -133,7 +134,8 @@ def main(args: argparse.Namespace) -> None:
     val_dataset = CocoDataset(
         split=val_split,
         transforms=get_transforms(train=False),
-        max_samples=args.max_samples
+        max_samples=args.max_samples,
+        seed=args.seed,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -185,6 +187,8 @@ if __name__ == "__main__":
         "--dev", action=argparse.BooleanOptionalAction, default=False, help="Use smaller dataset while developing.")
     parser.add_argument(
         "--max-samples", type=int, default=None, help="Limit dataset size.")
+    parser.add_argument(
+        "--seed", default=67, help="Seed for image selection.")
     parser.add_argument(
         "--epochs", type=int, default=5, help="Number of training epochs.")
     parser.add_argument(
