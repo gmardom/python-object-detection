@@ -1,5 +1,7 @@
 import argparse
-from typing import Any, Callable, Dict, List
+from pathlib import Path
+from time import perf_counter_ns
+from typing import Any, Callable, Dict, List, Tuple
 
 import torch
 from torch import nn, optim
@@ -9,7 +11,7 @@ from torchvision.models.detection import faster_rcnn, fasterrcnn_resnet50_fpn, F
 from tqdm import tqdm
 
 from coco import CocoDataset, CocoSplit
-from metrics import Metrics, MetricsEntry
+from metrics import Metrics, MetricsEntry, compute_found_rate
 
 
 def get_transforms(train: bool = True) -> transforms.Compose:
@@ -33,54 +35,15 @@ def build_model(num_classes: int):
     return model
 
 
+def make_model_filename(epoch: int, args: argparse.Namespace, ext: str = ".pt") -> str:
+    """
+    Generate model name from arguments.
+    """
+    return f"fasterrcnn_resnet50_fpn_coco_ep{epoch:03d}_lr{args.lr:.2e}_wd{args.weight_decay:.2e}_bs{args.batch_size:d}_ds{args.max_samples:d}{ext}"
+
+
 def collate_fn(batch):
     return tuple(zip(*batch))
-
-
-def compute_found_rate(predictions: List[Dict[str, torch.Tensor]], targets: List[Dict[str, torch.Tensor]], iou_threshold: float = 0.5):
-    """
-    predictions: list of dicts with keys 'boxes', 'labels', 'scores'
-    targets:     list of dicts with keys 'boxes', 'labels'
-    Returns: fraction of GT objects that were "found" (IoU >= thresh + correct class)
-    """
-    total_gt = 0
-    found = 0
-
-    for pred, target in zip(predictions, targets):
-        gt_boxes = target["boxes"]
-        gt_labels = target["labels"]
-        pred_boxes = pred["boxes"]
-        pred_labels = pred["labels"]
-
-        if gt_boxes.numel() == 0:
-            continue
-        total_gt += gt_boxes.size(0)
-
-        if pred_boxes.numel() == 0:
-            continue  # no predictions → nothing found
-
-        foreground_mask = (pred_labels != 0)
-        if not foreground_mask.any():
-            continue
-
-        # Compute IoU between all pred and GT boxes
-        # torchvision has a built-in function!
-        from torchvision.ops import box_iou
-        ious = box_iou(pred_boxes, gt_boxes)  # [num_pred, num_gt]
-
-        # For each GT box, check if any pred matches (same class + IoU >= thresh)
-        for gt_idx in range(gt_labels.size(0)):
-            gt_label = gt_labels[gt_idx]
-            # Find preds with same class
-            match_class = (pred_labels == gt_label)
-            if not match_class.any():
-                continue
-            # Max IoU among same-class preds for this GT
-            max_iou = ious[match_class, gt_idx].max()
-            if max_iou >= iou_threshold:
-                found += 1
-
-    return found / total_gt if total_gt > 0 else 1.0
 
 
 def train_one_epoch(
@@ -89,13 +52,16 @@ def train_one_epoch(
     loader: DataLoader[Any],
     optimizer: optim.Optimizer,
     device: torch.device,
-) -> float:
+) -> Tuple[float, List[int]]:
     model.train()
 
+    batch_times: List[int] = []
     running_loss = 0.0
     total = 0
 
     for images, targets in tqdm(loader, desc=f"Train {epoch: 3d}"):
+        start = perf_counter_ns()
+
         images = [img.to(device) for img in images]
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
@@ -109,8 +75,11 @@ def train_one_epoch(
         running_loss += loss.item()
         total += 1
 
+        end = perf_counter_ns()
+        batch_times.append(end - start)
+
     total = max(total, 1)
-    return running_loss / total
+    return running_loss / total, batch_times
 
 
 def evaluate(
@@ -118,24 +87,29 @@ def evaluate(
     model: nn.Module,
     loader: DataLoader[Any],
     device: torch.device,
-) -> float:
+) -> Tuple[float, List[int]]:
     model.eval()
 
+    batch_times: List[int] = []
     running_found_rate = 0.0
     total = 0
 
     with torch.no_grad():
         for images, targets in tqdm(loader, desc=f" Eval {epoch: 3d}"):
+            start = perf_counter_ns()
+
             images = [img.to(device) for img in images]
             targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
             outputs = model(images)
             found_rate = compute_found_rate(outputs, targets, iou_threshold=0.5)
             running_found_rate += found_rate
-
             total += 1
 
-    return running_found_rate / total
+            end = perf_counter_ns()
+            batch_times.append(end - start)
+
+    return running_found_rate / total, batch_times
 
 
 def main(args: argparse.Namespace) -> None:
@@ -176,17 +150,32 @@ def main(args: argparse.Namespace) -> None:
 
     # Training
     metrics = Metrics()
+    save_path = Path(args.save_path)
+    save_path.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(1, args.epochs + 1):
-        loss = train_one_epoch(epoch, model, train_loader, optimizer, device)
-        accu = evaluate(epoch, model, val_loader, device)
+        loss, train_times = train_one_epoch(epoch, model, train_loader, optimizer, device)
+        accu, eval_times = evaluate(epoch, model, val_loader, device)
 
-        measure = MetricsEntry(epoch, loss, accu)
+        measure = MetricsEntry(epoch, loss, accu, train_times, eval_times)
+
+        if args.save_all:
+            model_file_name = make_model_filename(epoch, args)
+            torch.save(model.state_dict(), save_path / model_file_name)
+            measure.add_file_name(model_file_name)
+
         metrics.add_epoch(measure)
         print(measure)
 
+    if not args.save_all:
+        model_file_name = make_model_filename(args.epochs, args)
+        metrics.epoch[-1].add_file_name(model_file_name)
+        torch.save(model.state_dict(), save_path / model_file_name)
+
     # Save metrics
-    metrics.save()
+    metrics.add_conf(args)
+    metrics_file_name = make_model_filename(args.epochs, args, ext=".json")
+    metrics.save(path=save_path / metrics_file_name)
 
 
 if __name__ == "__main__":
@@ -208,5 +197,9 @@ if __name__ == "__main__":
         "--device", default="cuda" if torch.cuda.is_available() else "cpu", help="Training device.")
     parser.add_argument(
         "--num-workers", type=int, default=4, help="Worker count.")
+    parser.add_argument(
+        "--save-path", type=str, default="models", help="Path where to save models.")
+    parser.add_argument(
+        "--save-all", action=argparse.BooleanOptionalAction, default=False, help="Save all epochs instead of only the last one.")
 
     main(parser.parse_args())
